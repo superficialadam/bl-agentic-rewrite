@@ -2,7 +2,7 @@
 
 ## Learnings
 - Env vars use `VITE_` prefix (not `PUBLIC_`); `REPLICATE_API_KEY` (not `REPLICATE_API_TOKEN`).
-- Supabase local: port 54351 (API) / 54322 (Postgres).
+- Supabase local: port 54321 (API) / 54322 (Postgres). Keys are `sb_publishable_*`/`sb_secret_*` format.
 - `@sveltejs/vite-plugin-svelte` v5+ required for vite 6; vitest v3+ required for vite 6.
 - Tailwind v4 CSS-based config; NO `<style>` blocks, NO inline `style=`.
 - TipTap direct (not svelte-tiptap); Svelte 5 runes (`$props()`, `$state()`, `$derived()`).
@@ -11,9 +11,7 @@
 
 ## Priority 2 — Supabase Clients + Tracing ✅
 
-## Priority 3 — Database Migration
-SQL migration: all 10 `rewrite_` tables, indexes, storage bucket, realtime. Verify: psql confirms tables + columns.
-- Refs: `01-DATA-MODEL.md`
+## Priority 3 — Database Migration ✅
 
 ## Priority 4 — Project CRUD + Layout Shell
 `/` project list page, `[project]/create/+page.svelte` three-panel layout shell, project create/load. Verify: create project via UI → assert DB row.
