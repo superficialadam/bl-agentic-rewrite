@@ -156,7 +156,101 @@ Base components in `app/components/ui/` (~50 files): button, dialog, sheet, popo
 - **Loading states**: Suspense boundaries, skeleton loaders, inline spinners, progress indicators
 - **No audio waveforms**: Audio clips rendered as solid rectangles
 
-## 3. API & Server Actions 🔍
+## 3. API & Server Actions ✅
+
+### Action Function (lines 594–696)
+
+Dispatches on two form fields: `intent` (timeline/workflow ops) and `action` (script ops). All handlers wrapped in try-catch with Sentry capture, returning `{ success: false, error }` on failure.
+
+### Intent-Based Actions (Timeline/Workflow)
+
+| Intent | Handler | Module | Type |
+|--------|---------|--------|------|
+| `save` | `handleSave()` L699 | `~/lib/timelines/service.server` | Write — saves clips, tracks, settings; creates timeline if needed |
+| `save-script` | `handleSaveScript()` L782 | `~/lib/scripts/service.server` | Write — merges TipTap JSON, updates version in-place |
+| `create-shot-nodes` | `handleCreateShotNodes()` L839 | `~/lib/timelines/shot-workflow.server` | Write — creates 6-node workflow (text-input → prompt-enhancer → text-merge ← style-text → generate-image → publish-asset) |
+| `update-shot-node` | `handleUpdateShotNode()` L875 | Direct DB (`node_workflows`) | Write — updates single node value in `live_state` JSONB |
+| `delete-shot-nodes` | `handleDeleteShotNodes()` L910 | Direct DB (`node_workflows`) | Write — removes nodes + connections from `live_state` |
+| `process-shot` | `handleProcessShot()` L948 | `~/lib/timelines/shot-workflow.server` | Trigger — runs workflow: enhance → merge → generate → publish |
+| `load-timeline` | `handleLoadTimeline()` L964 | `~/lib/timelines/service.server` | Read — fetches timeline content + clips |
+| `create-scene-timeline` | `handleCreateSceneTimeline()` L1035 | `~/lib/scenes/service.server` + `timeline-population.server` | Write — creates timeline, populates with shot placeholders + audio |
+| `update-scene-timeline-audio` | `handleUpdateSceneTimelineAudio()` L1094 | `~/lib/scenes/timeline-population.server` | Write — `populateSceneTimelineWithDialogue()` mode: 'minor' |
+| `reset-scene-timeline` | `handleResetSceneTimeline()` L1135 | `~/lib/scenes/timeline-population.server` | Write — full timeline reset |
+| `create-all-scene-timelines` | `handleCreateAllSceneTimelines()` L1175 | `~/lib/scenes/service.server` | Bulk Write — creates timelines for all scenes without one |
+
+### Action-Based Handlers (Script Operations)
+
+| Action | Handler | Module | Type |
+|--------|---------|--------|------|
+| `list-script-versions` | L1245 | `~/lib/scripts/service.server` | Read — returns script list for project |
+| `create-script-version` | L1282 | `~/lib/scripts/service.server` | Write — clones script + scenes + content, updates project pointer |
+| `restore-script-version` | L1365 | Direct DB (`projects`, `scripts`) | Write — switches `current_script_asset_id` with extensive RLS validation |
+| `translate-dialogue` / `translate-single-dialogue` | L1516 | `~/lib/scripts/translation.server` | AI Write — batch or single dialogue translation |
+| `set-script-default-locale` | L1621 | Direct DB (`scripts`) | Write — updates script locale field |
+
+### Loader (lines 407–544)
+
+Auth → brand verify → fetch project → list timelines → select or create default timeline (300s, 30fps, 1920×1080, Video+Audio tracks) → return deferred: `timelineData` (via `loadTimelineData()`) and `scriptData` (via `loadScriptData()`).
+
+### Custom API Routes (Client-Side Fetches)
+
+| Route | Method | Purpose | Called From |
+|-------|--------|---------|-------------|
+| `/api/dialogue/generate` | POST | Generate dialogue audio (ElevenLabs TTS) | Script editor character audio |
+| `/api/assets/create` | POST | Create asset record | QuickImportDialog, AssetSidePanel |
+| `/api/assets/create-version` | POST | Create asset version after upload | QuickImportDialog, AssetSidePanel |
+| `/api/assets/bulk-update` | POST | Bulk edit assets (collections, tags, description) | BulkEditDialog |
+| `/api/assets/collections` | POST/PATCH/DELETE | Collection CRUD + voice settings | Collection components |
+| `/api/assets/ai-review` | POST | AI tagging/categorization | AssetAIReviewDialog |
+| `/api/search/assets` | GET | Hybrid vector + text search (OpenAI embeddings) | useAssetSearch hook |
+| `/api/workflow/generate` | POST | Generate images/videos via AI models | WorkflowPanel, TimelineWorkflowModal |
+| `/api/workflow/prompt-enhancer` | POST | AI prompt enhancement | WorkflowPanel, TimelineWorkflowModal |
+| `/api/export/timeline-editor/{id}` | POST/GET | Start export job / poll status | useTimelineExport hook |
+
+### Direct Supabase Client Calls (from components)
+
+**Storage**: `supabase.storage.from('assets').upload()` / `.remove()` — direct browser-to-storage uploads bypass Vercel size limits. Bucket: `assets` (user files), `storyboard` (generated outputs).
+
+**Queries**: Components directly query `asset_collections`, `asset_tags`, `collection_assets`, `assets`, `processing_jobs` for reads, inserts, and lock management.
+
+**Locking**: `useAssetLock` hook (`app/hooks/useAssetLock.ts`) — asset-level locks via `locked_by`/`locked_at` fields, 5-min timeout, 30s heartbeat. `useWorkflowLock` — workflow-level locks via fetcher actions.
+
+### Real-Time Subscriptions (Supabase Channels)
+
+| Component | Table | Events | Filter | Purpose |
+|-----------|-------|--------|--------|---------|
+| AssetSidePanel | `assets`, `collection_assets`, `asset_collections` | * | `brand_id` | Live asset/collection updates |
+| TimelineEditor | `processing_jobs` | UPDATE | `timeline_asset_id` | Shot processing status |
+| TimelineEditor | `workflow_assets` | INSERT/UPDATE | `timeline_asset_id` | New shot assets |
+| TimelineEditor | `timeline_assets` | UPDATE | `id` | Timeline changes from collaborators |
+| WorkflowPanel | `workflow_assets` | INSERT | `workflow_id` | New generations |
+| WorkflowPanel | `processing_jobs` | INSERT/UPDATE | `workflow_id` | Job status |
+| ShotList | `shots` | * | `template_id` | Shot changes |
+| useAssetLock | `assets` | UPDATE | `id` | Lock changes |
+
+### Server-Side Service Modules
+
+| Module | Path | Key Functions |
+|--------|------|---------------|
+| Timeline Service | `app/lib/timelines/service.server.ts` | `createTimelineAsset`, `saveTimelineClips`, `loadTimelineClips`, `getTimelineContent`, `listProjectTimelines`, `loadSubTimelineData` |
+| Shot Workflow | `app/lib/timelines/shot-workflow.server.ts` | `createShotWorkflowNodes`, `processShotWorkflow`, `deleteShotWorkflowNodes` |
+| Script Service | `app/lib/scripts/service.server.ts` | `createScript`, `getScriptByAssetId`, `updateScriptContentInPlace`, `createScriptVersion`, `listProjectScripts` |
+| Scene Service | `app/lib/scenes/service.server.ts` | `createSceneTimeline`, `getScenesByScript`, `regenerateMasterTimeline` |
+| Timeline Population | `app/lib/scenes/timeline-population.server.ts` | `populateSceneTimelineWithDialogue`, `resetTimeline` |
+| Dialogue Service | `app/lib/dialogue/service.server.ts` | `generateDialogueAudio`, `getAudioForScript` |
+| Translation Service | `app/lib/scripts/translation.server.ts` | `translateDialogueLines`, `translateSingleDialogueLine` |
+| Project Service | `app/lib/projects/service.server.ts` | `createProjectWithDefaults`, `updateProject` |
+| Auth | `app/lib/auth.server.ts` | `requireAuthWithClient`, `verifyBrandAccess` |
+| Supabase Factory | `app/services/supabase.server.ts` | `createSupabaseServerClient`, `createSupabaseServiceRoleServerClient` |
+
+### Key Patterns
+
+- **Dual routing**: Action function checks `intent` first, then `action` — for timeline vs script operations
+- **Deferred loading**: Loader returns Promises for heavy data (timeline, script) enabling streaming SSR
+- **Locale normalization**: Multiple handlers convert empty string → `null` for locale params
+- **Service layer**: Most handlers delegate to `*.server.ts` modules; only simple updates go direct to DB
+- **useFetcher**: Client uses `useFetcher()` for mutations (auto-save, shot ops, workflow save) — no full-page reloads
+- **Hybrid data access**: Server actions for mutations, direct Supabase client for reads + real-time + storage uploads
 
 ## 4. Database & Data Model 🔍
 
