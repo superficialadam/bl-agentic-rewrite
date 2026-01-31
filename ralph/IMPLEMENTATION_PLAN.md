@@ -9,9 +9,7 @@
 
 ## Priority 1 — SvelteKit + Tailwind Scaffold ✅
 
-## Priority 2 — Supabase Clients + Tracing
-`$lib/server/db.ts`, `$lib/stores/supabase.ts`, `traced()` in `$lib/server/trace.ts`, root layout. Verify: unit test for `traced()`, dev server loads.
-- Refs: `00-FOUNDATIONS.md` (three-tier state, tracing contract)
+## Priority 2 — Supabase Clients + Tracing ✅
 
 ## Priority 3 — Database Migration
 SQL migration: all 10 `rewrite_` tables, indexes, storage bucket, realtime. Verify: psql confirms tables + columns.
