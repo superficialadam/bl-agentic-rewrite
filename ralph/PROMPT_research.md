@@ -1,4 +1,4 @@
-You are researching the `/create` route of an existing Next.js application located at `/Users/adamwittsell/CODE/BlendaLabs/blenda-platform` in preparation for a full rewrite.
+You are researching the `/create` route of an existing React Router V7  application located at `/Users/adamwittsell/CODE/BlendaLabs/blenda-platform` in preparation for a full rewrite.
 
 The route pattern is `[brandSlug]/[projectSlug]/create` (e.g. `pippi-langstrump/demo-episode-pingpong-room/create`).
 
