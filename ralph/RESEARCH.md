@@ -609,4 +609,135 @@ Mixed strategy:
 - **No role-based content restrictions**: All team members (owner/admin/member) have equal content access within a brand
 - **Locking (not auth)**: Asset/workflow locks via `locked_by`/`locked_at` fields prevent concurrent edits but are cooperative, not enforced by RLS
 
-## 7. Business Logic & Edge Cases 🔍
+## 7. Business Logic & Edge Cases ✅
+
+### What "Create" Produces
+
+The `/create` route manages five artifact types:
+
+1. **Timelines** — `assets` with `file_type='timeline'`, structure in `asset_versions.metadata`, clips in `timeline_assets`
+2. **Scripts** — Structured data across `scripts` → `scenes` → `scene_content` tables, plus legacy TipTap JSON in `asset_versions.metadata`
+3. **Scene Timelines** — Sub-timeline assets linked to scenes, auto-populated with shot placeholders + dialogue audio
+4. **Shot Assets** — AI-generated images/videos published to `assets` via 6-node workflow chains
+5. **Workflow Nodes** — Stored in `node_workflows.live_state` JSONB
+
+### Validation Rules
+
+**No Zod schemas** — runtime checks only:
+
+- `brandSlug` and `projectSlug` required (throws Error if missing) — route L418–419
+- Script save requires `scriptAssetId` + `tiptapJson` — L786–788
+- Shot node creation requires `shotPrompt`, `timelineAssetId`, `shotClipId`, `brandId` — L843–847
+- Empty string locales normalized to `null` across multiple handlers — L1042–1048, L1102–1107, L1142–1148
+- Script version creation rejects empty content — L1310–1315
+- Audio duration must be > 0 — `timeline-population.server.ts` L554–564
+- File type checks via `isSupportedMediaFile()`, `isVideoFile()`, etc. — L3181–3189
+- **No explicit size, duration, or resolution validation** on timeline settings
+
+### Error Handling
+
+**Server-side**: All action handlers wrapped in try-catch (L633–696). Pattern:
+```typescript
+catch (error) {
+  Sentry.captureException(error);
+  return { success: false, error: error.message };
+}
+```
+
+**Client-side**:
+- Toast notifications for user-visible errors ("Failed to save timeline", "Failed to save script")
+- Fixed Alert component for debounced save errors, auto-dismisses after 5s — L2390–2395, L4004–4012
+- **Offline detection**: Checks `navigator.onLine` before save attempts — L2671, L2764
+- Sentry capture on script save errors (L2733), workflow errors (L3016, L3477), asset resolution errors (L2310)
+
+### Default Values & Auto-Creation
+
+| Setting | Default | Source |
+|---------|---------|--------|
+| Timeline duration | 300s (5 min) | Route L477–482 |
+| FPS | 30 | Route L477 |
+| Resolution | 1920×1080 | Route L477 |
+| Default tracks | 1 Video + 1 Audio | Route L502–516 |
+| Image clip duration | 3.0s | `constants.ts` `DEFAULT_IMAGE_DURATION` |
+| Shot clip duration | 5s | `timeline-population.server.ts` L867 |
+| Audio clip offset | 1s after shot start | `timeline-population.server.ts` |
+| Track height | 80px | `constants.ts` |
+
+**Auto-creation**: If no timeline exists, loader creates one with defaults and updates `project.current_timeline_asset_id` (L471–517). Scripts are **not** auto-created.
+
+### Loader Edge Cases
+
+| Condition | Behavior | Lines |
+|-----------|----------|-------|
+| No timelines exist | Auto-creates timeline with defaults | L471–517 |
+| URL timeline ID invalid | Falls back to `project.current_timeline_asset_id` | L467 |
+| No `current_timeline_asset_id` | Same as no timelines — auto-creates | L471 |
+| No script exists | Returns `null` scriptData, no auto-creation | L521 |
+| Script asset missing `current_version` | Returns null scriptData | `loadScriptData()` L318–320 |
+| Brand access denied | `verifyBrandAccess()` throws → error boundary | L422–426 |
+
+### Save & Concurrency
+
+**Auto-save**:
+- **Timeline**: 1s debounce via `useTimelinePersistence` hook. Serializes full engine state to JSON, compares with last saved state (change detection). Silent on success, toast+alert on failure.
+- **Script**: 1s debounce via `setTimeout`. Syncs to both TipTap JSON blob and structured tables (`syncTipTapToDatabase`). Offline check before attempting.
+- **`beforeunload`** event warns of unsaved changes — `useTimelinePersistence.ts` L227–237
+
+**Concurrent edits**:
+- **Last writer wins** — no optimistic locking on save
+- Realtime subscription detects external timeline changes (L2531–2658)
+- **Timing-based guard**: Ignores external updates if `hasUnsavedChangesRef.current === true` (L2566–2571)
+- 5-second window to detect own saves vs external changes (L2554–2562) — noted as unreliable in code comments (L2518–2530)
+- Script realtime subscription enabled (L2791–2842)
+
+### Undo/Redo
+
+**Not implemented.** No state history, no undo manager, no Ctrl+Z/Y handlers for timeline or workflow operations. Mitigation: debounced autosave + script versioning (manual only).
+
+### Sub-Timeline / Scene Timeline
+
+**Creation** (L1035–1092):
+- Creates timeline asset via `createSceneTimeline()` service
+- Duration calculated from scene's percentage of total script content (min 10s) — `scenes/service.server.ts` L295–331
+- Auto-populates via `resetTimeline()` with shot placeholders from action lines + audio clips from dialogue
+
+**Population modes** (`timeline-population.server.ts`):
+- `minor` — Preserves clip timing, updates URLs/durations, keeps orphaned clips
+- `full` — Resequences all clips in script order, removes orphans, 0.1s gap between clips
+- `analyze` — Returns change type ('none'/'minor'/'major') without modifying
+
+**Reset** (`resetTimeline()` in `timeline-population.server.ts` L688–995):
+- Preserves video tracks and manually-added video clips
+- Removes audio tracks for characters no longer in script
+- Creates audio tracks per character, shot placeholders (5s each), audio clips (1s offset after shot)
+
+**No master timeline regeneration** — sub-timelines referenced as clips with `referencedTimelineId` but no automatic composition.
+
+### Workflow Execution
+
+**Shot workflow** (6-node chain per shot — `shot-workflow.server.ts`):
+
+1. `text-input` → user's shot prompt
+2. `prompt-enhancer` → AI-enhanced prompt (brand context)
+3. `text-input` (style) → preset storyboard style text (`STORYBOARD_STYLE_TEXT` constant)
+4. `text-merge` → merged enhanced prompt + style
+5. `generate-image` → AI generation (preferred model: `prunaai/z-image-turbo`, 120s timeout)
+6. `publish-asset` → uploads to Supabase, creates/updates target asset
+
+**Processing flow**: User triggers → `intent: 'process-shot'` → server sets nodes to 'processing' → runs chain → updates `processing_jobs` table → realtime subscription updates clip status + src on client.
+
+**Error handling**: Node status set to 'error', clip remains in 'error' state, returns `{ success: false, error }`. Upload failures logged but continue with external URL.
+
+### Script Versioning
+
+- **List**: `list-script-versions` action returns all scripts for project — L1245
+- **Create**: `create-script-version` clones script + scenes + scene_content, updates `project.current_script_asset_id` — L1282–1363
+- **Restore**: `restore-script-version` switches `current_script_asset_id` pointer with RLS validation — L1365
+- **Guard**: Rejects version creation if script has no scenes — L1310–1315
+
+### Feature Flags
+
+**None found.** No environment-based feature flags or toggle system. Conditional behavior is data-driven:
+- Locale support based on `brands.locales`
+- Preview mode toggle (`timeline` vs `easy`) persisted in localStorage
+- Tab-based panel states per view (`edit`/`script`/`workflow`)
