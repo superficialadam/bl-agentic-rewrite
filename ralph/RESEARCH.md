@@ -252,7 +252,156 @@ Auth → brand verify → fetch project → list timelines → select or create 
 - **useFetcher**: Client uses `useFetcher()` for mutations (auto-save, shot ops, workflow save) — no full-page reloads
 - **Hybrid data access**: Server actions for mutations, direct Supabase client for reads + real-time + storage uploads
 
-## 4. Database & Data Model 🔍
+## 4. Database & Data Model ✅
+
+### Schema Source
+
+- **Auto-generated types**: `app/types/supabase.d.ts` (67 tables across `public` + `analytics` schemas)
+- **Migrations**: `supabase/migrations/` — key files listed per table below
+
+### Core Tables
+
+#### `brands`
+`supabase/migrations/20250920104520_create_brands_table.sql`
+- Columns: `id` UUID PK, `name` TEXT, `slug` TEXT (auto-generated via `generate_slug()` trigger), `created_at`, `updated_at`
+- Linked to teams via `brands_teams` junction (brand_id, team_id)
+- RLS: authenticated users can view; CRUD restricted to team members
+
+#### `projects`
+`supabase/migrations/20251211000001_create_projects_table.sql`
+- Columns: `id` UUID PK, `brand_id` FK→brands, `name` VARCHAR(200), `description`, `slug`, `status` CHECK('draft','in_progress','review','approved','published'), `series_name`, `season_number`, `episode_number`, `target_duration_seconds`, `format_settings` JSONB (resolution/fps/aspect), `production_notes`, `current_script_asset_id` FK→assets, `current_timeline_asset_id` FK→assets, `created_by` FK→auth.users
+- UNIQUE(brand_id, name)
+- RLS: brand-member access via brands_teams + team_members
+- Realtime enabled
+
+#### `assets`
+`supabase/migrations/20251128134035_create_asset_management_system.sql`
+- Central table — timelines, scripts, images, audio, video all stored as assets
+- Columns: `id` UUID PK, `brand_id` FK→brands, `project_id` FK→projects, `name` VARCHAR(200), `description`, `file_type` VARCHAR(20) ('image','audio','video','text','document','script','timeline'), `status` ('processing','pending_thumbnail','ready'), `thumb_url`, `thumb_blurhash`, `current_version_id` FK→asset_versions, `current_version_id_locales` JSONB, `locked_by` FK→auth.users, `locked_at`, `metadata` JSONB
+- Legacy columns still present: `asset_type`, `url`, `template_id`, `job_id`, `locale`
+- Indexes: brand_id, project_id, file_type, name, description (GIN tsvector)
+- RLS: brand-member SELECT; brand-based CRUD
+- Realtime enabled
+
+#### `asset_versions`
+Same migration as assets
+- Columns: `id` UUID PK, `asset_id` FK→assets (CASCADE), `version_number` INT, `locale` TEXT (default 'sv'), `file_url` VARCHAR(500), `file_size` BIGINT, `metadata` JSONB (contains TimelineContent for timeline assets), `notes`, `description`, `workflow_id` FK→node_workflows, `created_by` FK→auth.users
+- UNIQUE(asset_id, version_number)
+- **Timeline content stored in `metadata`** as:
+```typescript
+{ version: "2.0", settings: { duration, frameRate, resolution: { width, height } }, tracks: [{ id, name, type, muted, hidden, order }] }
+```
+- RLS: inherits from parent assets via brand membership
+
+#### `asset_renditions`
+Same migration
+- `asset_version_id` FK→asset_versions, `type` ('thumbnail_sm','thumbnail_lg','waveform','preview'), `file_url`, `width`, `height`, `blurhash`
+- UNIQUE(asset_version_id, type)
+
+### Timeline Tables
+
+#### `timeline_assets`
+`supabase/migrations/20251211000001_create_projects_table.sql` + `20251212142419_update_timeline_assets_for_editor.sql`
+- Clip storage — one row per clip in a timeline
+- Columns: `id` UUID PK, `timeline_asset_id` FK→assets (CASCADE), `asset_id` FK→assets (nullable — shots have no source asset), `referenced_timeline_id` FK→assets (for sub-timelines), `track_id`, `track_type` ('video','audio','subtimeline'), `track_order` INT, `start_time` NUMERIC(10,3), `duration` NUMERIC(10,3), `clip_data` JSONB
+- `clip_data` contains: `{ id, trackId, startTime, duration, originalDuration, offset, name, type, src, groupId, assetId, assetVersionId, assetVersionNumber, referencedTimelineId, volume, opacity, position, scale, shotPrompt, shotName, targetAssetId, workflowNodes, processingStatus, thumbUrl }`
+- Indexes: (timeline_asset_id, track_id), asset_id, timeline_asset_id
+- RLS: brand-member access
+- Trigger: auto-updates `updated_at`
+
+### Script & Scene Tables
+
+#### `scripts`
+`supabase/migrations/20251216083800_structured_scripts_and_scenes.sql`
+- Columns: `id` UUID PK, `project_id` FK→projects (CASCADE), `asset_id` FK→assets (CASCADE), `title`, `locale` FK→locales (default 'sv')
+- Indexes: project_id, asset_id
+- RLS: team access via scripts→projects→brands_teams→team_members
+
+#### `scenes`
+Same migration
+- Columns: `id` UUID PK, `script_id` FK→scripts (CASCADE), `element_id` VARCHAR(100) (unique, maps to TipTap), `int_ext` ('INT','EXT','INT/EXT'), `location`, `time_of_day`, `scene_number`, `order_index`, `timeline_asset_id` FK→assets (SET NULL)
+- UNIQUE(script_id, timeline_asset_id)
+- DB function: `parse_scene_heading(TEXT)` → splits "INT. COFFEE SHOP - DAY" into fields
+
+#### `scene_content`
+Same migration
+- Columns: `id` UUID PK, `scene_id` FK→scenes (CASCADE), `element_id` VARCHAR(100) (unique), `type` CHECK('action','character','dialogue','parenthetical'), `content` TEXT (original language), `content_localized` JSONB (`{locale: text}`), `order_index`, `asset_id` FK→assets (generated audio), `character_collection_id` FK→asset_collections, `director_tags` JSONB (`[{type, value}]`)
+- Translation: original in `content`, translations in `content_localized[locale]`, timestamps in `content_localized[locale_updated_at]`
+
+#### `script_assets`
+`supabase/migrations/20251211000001_create_projects_table.sql`
+- Junction: links dialogue audio to script elements
+- PK: (script_asset_id, element_id)
+- Columns: `script_asset_id` FK→assets, `asset_id` FK→assets (audio), `element_id`, `character_id` (collection ID), `content_hash` VARCHAR(64) (SHA-256 for regen detection)
+
+### Workflow & Processing Tables
+
+#### `node_workflows`
+`supabase/migrations/20251124084557_create_node_workflows.sql`
+- Columns: `id` UUID PK, `shot_id` FK→shots, `asset_id` FK→assets, `brand_id` FK→brands, `name`, `description`, `live_state` JSONB (`{ nodes: [...], connections: [...], viewport: {...} }`), `locked_by` FK→auth.users, `locked_at`
+- CHECK: exactly one of (shot_id, asset_id, brand_id) must be set; UNIQUE on shot_id; UNIQUE on asset_id
+- RLS: open for authenticated users (to be refined)
+- Realtime enabled
+
+#### `node_workflow_versions`
+Same migration
+- Columns: `workflow_id` FK→node_workflows (CASCADE), `version_number`, `state_snapshot` JSONB (immutable), `commit_message`, `triggered_by_job_id`, `created_by`
+- UNIQUE(workflow_id, version_number)
+
+#### `processing_jobs`
+`supabase/migrations/20250917162010_...`
+- Columns: `id` UUID PK, `job_type` TEXT ('generate_asset_thumbnail', etc.), `status` CHECK('queued','processing','completed','failed','suspended'), `options` JSONB, `metadata` JSONB (asset_id, version_id, file_url, brand_id), `error_message`
+- Realtime enabled for status updates
+
+#### `job_events`
+- `job_id` FK→processing_jobs (CASCADE), `event_type`, `event_data` JSONB
+
+### Organization Tables
+
+#### `asset_collections`
+`supabase/migrations/20251128134035_create_asset_management_system.sql`
+- Columns: `id` UUID PK, `name`, `type` CHECK('character','environment','prop','general'), `description`, `cover_asset_id` FK→assets, `brand_id` FK→brands, `metadata` JSONB (voice_settings for characters: ElevenLabs voice_id, stability, similarity)
+- Junction tables: `collection_assets` (collection_id, asset_id, role, sort_order), `collection_tags` (collection_id, tag_id)
+
+#### `tags`
+Same migration
+- Columns: `id` UUID PK, `name`, `group` ('style','audio-type','mood','content'), `applies_to` TEXT[] (file types), `color` VARCHAR(7), `brand_id` FK→brands (null = global)
+- UNIQUE(name, brand_id)
+- Junction: `asset_tags` (asset_id, tag_id)
+
+#### `brand_words`
+`supabase/migrations/20260119154857_add_script_translation.sql`
+- Translation dictionary for brand-specific terms
+- Columns: `brand_id` FK→brands, `locale` FK→locales, `word`, `original_brand_word_id` (self-ref for linking translations)
+
+### Search Infrastructure
+
+#### `viewm_search_assets` (Materialized View)
+`supabase/migrations/20260116173454_create_search_assets_view.sql`
+- Denormalized asset search with full-text (tsvector) + trigram matching
+- Includes: asset fields, latest version info, rendition URLs, tags by group, collection info, search vectors
+- Refreshed async via `pg_notify('search_refresh_needed')` triggers on assets, asset_versions, asset_tags, collection_assets, asset_renditions
+- GIN indexes on search_tsv, trigram text, tag_ids, collection_ids
+
+### Storage
+
+#### `assets` Bucket (Supabase Storage)
+- Public read, 500MB file limit
+- Path: `{brand_id}/{file_type}/{asset_id}/{name}-v{version}.{ext}`
+- Allowed: jpeg, png, webp, gif, mp4, webm, quicktime, mpeg, wav, ogg, mp4 audio, pdf, plain text
+- RLS: brand-member upload/update/delete
+
+### Key Patterns
+
+- **Asset-centric model**: Everything (timelines, scripts, images, audio) is an `asset` with `asset_versions`. `file_type` distinguishes them.
+- **Dual storage**: Timeline structure in `asset_versions.metadata` JSONB; clip rows in `timeline_assets` table.
+- **Locale-aware versioning**: `current_version_id_locales` JSONB on assets maps locale→version_id.
+- **Structured scripts**: `scripts` → `scenes` → `scene_content` replaces earlier JSON blob approach. Original content + translations coexist via `content` + `content_localized`.
+- **Polymorphic workflows**: `node_workflows` can belong to a shot, asset, or brand (CHECK constraint enforces exactly one).
+- **RLS chain**: Most tables enforce access via brand membership: table→projects→brands_teams→team_members→auth.users.
+- **Realtime**: Enabled on assets, asset_versions, projects, node_workflows, processing_jobs, job_events, scripts, scenes, scene_content.
+- **Locking**: Optimistic locking via `locked_by`/`locked_at` on assets and node_workflows (5-min timeout, 30s heartbeat).
+- **Search**: Materialized view with async refresh via pg_notify, not synchronous triggers.
 
 ## 5. External Services & Integrations 🔍
 
