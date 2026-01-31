@@ -403,7 +403,110 @@ Same migration
 - **Locking**: Optimistic locking via `locked_by`/`locked_at` on assets and node_workflows (5-min timeout, 30s heartbeat).
 - **Search**: Materialized view with async refresh via pg_notify, not synchronous triggers.
 
-## 5. External Services & Integrations 🔍
+## 5. External Services & Integrations ✅
+
+### AI Image Generation
+
+| Provider | SDK | Env Key | Entry Point |
+|----------|-----|---------|-------------|
+| **Replicate** | `replicate` v1.4.0 | `REPLICATE_API_KEY` | `app/services/genai.server.ts` L9–135 |
+| **FAL.AI** | `@fal-ai/client` v1.8.3 | `FAL_API_KEY` | `app/services/genai.server.ts` L140–188 |
+| **Google Gemini** | `@google/genai` v1.35.0 | `GEMINI_API_KEY` | `app/services/genai.server.ts` L194–393 |
+
+All three called from `app/routes/api.workflow.generate.tsx` via `createPredictionSync()`. Gemini handles image-to-image with base64 conversion for multimodal inputs.
+
+### AI Video Generation
+
+| Provider | SDK | Env Key | Entry Point |
+|----------|-----|---------|-------------|
+| **Google Veo** | `@google/genai` v1.35.0 | `GEMINI_API_KEY` | `app/services/genai.server.ts` L443–685 |
+| **KIE** | Direct fetch (no SDK) | `KIE_API_KEY` | `app/services/genai.server.ts` L691–830 |
+
+Veo polls for completion (up to 6 min), downloads from Google file API. KIE uses webhook callbacks at `{APP_URL}/api/webhooks/kie?jobId={id}`.
+
+### AI Text / LLM
+
+| Provider | Model | SDK | Env Key | Purpose | File |
+|----------|-------|-----|---------|---------|------|
+| **OpenAI GPT-4** | gpt-4 | Direct fetch | `OPENAI_API_KEY` | Translation, script classification | `app/services/openai.ts` |
+| **OpenAI Embeddings** | text-embedding-3-small | Direct fetch | `OPENAI_API_KEY` | Semantic asset search (1536-dim) | `app/services/embeddings.server.ts` |
+| **Anthropic Claude** | claude-haiku-4.5 | `@mastra/core` v1.0.0-beta.19 | `AI_GATEWAY_API_KEY` (Vercel AI Gateway) | Prompt enhancement, agents (Director, Writer, Librarian) | `app/lib/workflow/prompt-enhancer.server.ts`, `app/lib/mastra/agents/dispatch.ts` |
+| **Google Gemini Flash** | gemini-3-flash | `@mastra/core` | `AI_GATEWAY_API_KEY` | Dispatch agent routing | `app/lib/mastra/agents/dispatch.ts` L31 |
+| **Google Gemini 2.5 Flash** | (via OpenRouter) | Direct fetch | `OPENROUTER_API_KEY` | VLM asset analysis/tagging | `app/lib/assets/analyze-asset.server.ts` |
+
+Mastra agent framework (`@mastra/core`, `@mastra/memory`, `@mastra/pg`) provides streaming responses and tool calling via `@ai-sdk/react` v3.0.5.
+
+### Text-to-Speech
+
+**ElevenLabs** — `@elevenlabs/elevenlabs-js` v2.26.0, env: `ELEVENLABS_API_KEY`
+
+| Function | Model | Endpoint | File |
+|----------|-------|----------|------|
+| `textToSpeech()` | `eleven_multilingual_v2` | Standard TTS | `app/services/elevenlabs.server.ts` |
+| `textToDialogue()` | `eleven_v3` | `/v1/text-to-dialogue/with-timestamps` | `app/services/elevenlabs.server.ts` |
+| Voice listing | — | `/v1/voices` | `app/routes/api.elevenlabs.voices.tsx` |
+
+Supports 19+ language codes. Preserves director tags (`[excited]`, `[whispering]`). Audio uploaded to Supabase with locale-specific versioning. Called from `app/routes/api.dialogue.generate.tsx` and `app/routes/api.elevenlabs.dialogue.tsx`.
+
+### File Storage (Supabase Storage)
+
+**SDK**: `@supabase/supabase-js` v2.56.0 + `@supabase/ssr` v0.7.0
+
+| Bucket | Path Convention | Contents |
+|--------|----------------|----------|
+| `assets` | `{brandId}/{fileType}/{assetId}/{name}-v{version}.{ext}` | User uploads (images, video, audio, docs) |
+| `storyboard` | `{templateId}/{shotId}-{timestamp}-sync.{ext}` or `workflows/{nodeId}-{timestamp}-sync.{ext}` | AI-generated workflow outputs |
+
+- **Client-side direct upload**: Browser → Supabase Storage (bypasses Vercel 4.5MB limit), then `api.assets.create-from-storage.tsx` creates record + moves file to final path
+- **Server-side re-upload**: `uploadExternalUrlToSupabase()` in `genai.server.ts` L949–1011 downloads AI outputs (Replicate, FAL, Google) and uploads to Supabase
+- 500MB max file size, public read URLs via `getPublicUrl()`
+
+### Semantic Search
+
+`app/routes/api.search.assets.tsx` — Hybrid search combining:
+1. OpenAI `text-embedding-3-small` query embeddings (cached in-memory)
+2. PostgreSQL RPC `search_assets_smart()` — vector similarity + keyword matching + metadata filters
+3. Fallback to `ILIKE` keyword search if embedding generation fails
+
+### Video Rendering & Export
+
+| Service | SDK | Env Keys | Purpose | File |
+|---------|-----|----------|---------|------|
+| **Shotstack** | Direct API | `SHOTSTACK_API_KEY`, `SHOTSTACK_ENVIRONMENT` | Final video composition | `app/routes/api.webhooks.shotstack.tsx` |
+| **Remotion** | `@remotion/player` v4.0.382 | — | In-browser video preview/player | Client-side only |
+| **PDFKit** | `pdfkit` v0.17.2 | — | Script PDF export (US Letter, Courier) | `app/routes/api.export.script.pdf.$assetVersionId.tsx` |
+
+### Monitoring
+
+**Sentry** — `@sentry/react-router` v10.29.0
+- DSN: `o4510483128909824.ingest.de.sentry.io`
+- Config: `instrument.server.mjs`, `app/entry.server.tsx`, `app/entry.client.tsx`
+- Disabled in development, captures PII (request headers, IP)
+- Used in route action catch blocks and API error handlers
+
+### Webhook Endpoints (Async Callbacks)
+
+| Route | Provider | Trigger |
+|-------|----------|---------|
+| `api.webhooks.replicate.tsx` | Replicate | Prediction complete |
+| `api.webhooks.kie.tsx` | KIE | Video generation complete |
+| `api.webhooks.shotstack.tsx` | Shotstack | Video render complete |
+| `api.webhooks.bannerbear.tsx` | Bannerbear | Image template complete |
+
+All follow same pattern: receive callback → update `processing_jobs` status → download output → upload to Supabase Storage.
+
+### Background Task Processor
+
+`tasks/endless-task-processor/` — VPS-based worker with its own `.env`
+- Runs same AI SDKs (Replicate, FAL, Google, ElevenLabs)
+- Additional GPU providers: `RUNPOD_API_KEY`, `MODAL_ID`/`MODAL_SECRET`
+- Handles: thumbnail generation, AI generation jobs, analytics
+
+### Not Used in /create Flow
+
+- **Bannerbear** — template-based image generation (social media posts)
+- **GetLate** — social media publishing orchestrator (Facebook, Instagram, TikTok, YouTube OAuth)
+- **Stripe/payments** — no payment integration found anywhere in codebase
 
 ## 6. Auth & Permissions 🔍
 
