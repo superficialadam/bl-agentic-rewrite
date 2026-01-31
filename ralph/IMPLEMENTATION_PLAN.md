@@ -13,9 +13,7 @@
 
 ## Priority 3 — Database Migration ✅
 
-## Priority 4 — Project CRUD + Layout Shell
-`/` project list page, `[project]/create/+page.svelte` three-panel layout shell, project create/load. Verify: create project via UI → assert DB row.
-- Refs: `00-FOUNDATIONS.md` (routes), `02-SCRIPT-EDITOR.md` (layout)
+## Priority 4 — Project CRUD + Layout Shell ✅
 
 ## Priority 5 — Script + Timeline API Routes
 GET/POST `/api/scripts/[id]`, `/api/scripts/[id]/sync`, GET `/api/timelines/[id]`, POST/PUT/DELETE `/api/clips/[id]`. Verify: curl smoke tests return shaped JSON.
