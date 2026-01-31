@@ -19,9 +19,7 @@
 
 ## Priority 6 — TipTap Custom Nodes ✅
 
-## Priority 7 — Script Sync to Database
-`syncToDatabase()` with 1s debounce, orphan cleanup, load-from-DB reconstruction. Verify: mission test — type heading + dialogue → autosave → assert DB rows → reload → content matches.
-- Refs: `02-SCRIPT-EDITOR.md` (persistence flow, sync API)
+## Priority 7 — Script Sync to Database ✅
 
 ## Priority 8 — Outliner Panel
 Left panel scene list from `rewrite_scenes`, click-to-scroll. Verify: mission test — type two scenes → assert outliner shows both → click second → editor scrolls.

@@ -45,6 +45,7 @@
 				{#if data.project.current_script_id}
 					<ScriptEditor
 						scriptId={data.project.current_script_id}
+						initialContent={data.initialContent}
 						onUpdate={handleEditorUpdate}
 					/>
 				{:else}
