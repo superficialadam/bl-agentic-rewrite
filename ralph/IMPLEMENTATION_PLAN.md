@@ -1,11 +1,11 @@
 # Implementation Plan
 
 ## Learnings
-- Env vars use `VITE_` prefix (not `PUBLIC_`); `REPLICATE_API_KEY` (not `REPLICATE_API_TOKEN`).
 - Supabase local: port 54321 (API) / 54322 (Postgres). Keys are `sb_publishable_*`/`sb_secret_*` format.
 - `@sveltejs/vite-plugin-svelte` v5+ required for vite 6; vitest v3+ required for vite 6.
 - Tailwind v4 CSS-based config; NO `<style>` blocks, NO inline `style=`.
 - TipTap direct (not svelte-tiptap); Svelte 5 runes (`$props()`, `$state()`, `$derived()`).
+- Svelte 5 forbids destructuring `$`-prefixed vars (e.g., ProseMirror `$from`); use property access instead.
 
 ## Priority 1 — SvelteKit + Tailwind Scaffold ✅
 
@@ -17,9 +17,7 @@
 
 ## Priority 5 — Script + Timeline API Routes ✅
 
-## Priority 6 — TipTap Custom Nodes
-TipTap setup + 5 nodes (sceneHeading, action, character, dialogue, parenthetical). Render in center panel. Verify: unit tests for scene heading parser + node rendering.
-- Refs: `02-SCRIPT-EDITOR.md` (custom nodes, rendering rules)
+## Priority 6 — TipTap Custom Nodes ✅
 
 ## Priority 7 — Script Sync to Database
 `syncToDatabase()` with 1s debounce, orphan cleanup, load-from-DB reconstruction. Verify: mission test — type heading + dialogue → autosave → assert DB rows → reload → content matches.

@@ -1,1 +1,46 @@
 @import 'tailwindcss';
+
+/* TipTap Script Editor styles */
+.script-editor .tiptap {
+	outline: none;
+	min-height: 100%;
+	color: var(--color-zinc-100);
+	font-family: 'Courier New', Courier, monospace;
+	font-size: 14px;
+	line-height: 1.6;
+}
+
+.script-editor .tiptap .scene-heading {
+	font-weight: 700;
+	text-transform: uppercase;
+	margin: 1.5em 0 0.5em;
+	font-size: 14px;
+}
+
+.script-editor .tiptap .script-action {
+	margin: 0.5em 0;
+}
+
+.script-editor .tiptap .script-character {
+	text-align: center;
+	text-transform: uppercase;
+	margin: 1em 0 0;
+	font-weight: 600;
+}
+
+.script-editor .tiptap .script-dialogue {
+	margin: 0.25em 4em;
+}
+
+.script-editor .tiptap .script-parenthetical {
+	margin: 0.25em 6em;
+	color: var(--color-zinc-400);
+}
+
+.script-editor .tiptap p.is-editor-empty:first-child::before {
+	content: 'Start writing your script...';
+	color: var(--color-zinc-600);
+	float: left;
+	height: 0;
+	pointer-events: none;
+}

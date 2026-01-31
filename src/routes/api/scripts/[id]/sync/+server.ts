@@ -40,7 +40,6 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			elementIds.push(elementId);
 
 			if (node.type === 'sceneHeading') {
-				const text = getNodeText(node);
 				const sceneNumber = (node.attrs?.scene_number as number) ?? null;
 				const intExt = (node.attrs?.int_ext as string) ?? null;
 				const location = (node.attrs?.location as string) ?? null;

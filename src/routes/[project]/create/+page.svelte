@@ -1,7 +1,19 @@
 <script lang="ts">
 	import type { PageData } from './$types';
+	import type { JSONContent } from '@tiptap/core';
+	import ScriptEditor from '$lib/components/script/ScriptEditor.svelte';
 
 	let { data }: { data: PageData } = $props();
+
+	async function handleEditorUpdate(doc: JSONContent) {
+		if (!data.project.current_script_id) return;
+
+		await fetch(`/api/scripts/${data.project.current_script_id}/sync`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ document: doc })
+		});
+	}
 </script>
 
 <div class="flex h-screen flex-col bg-zinc-950 text-zinc-100">
@@ -29,8 +41,17 @@
 			<div class="border-b border-zinc-800 px-4 py-2">
 				<span class="text-xs font-medium uppercase tracking-wider text-zinc-500">Script</span>
 			</div>
-			<div class="flex-1 overflow-y-auto p-6">
-				<p class="text-sm text-zinc-600">Editor will load here</p>
+			<div class="min-h-0 flex-1">
+				{#if data.project.current_script_id}
+					<ScriptEditor
+						scriptId={data.project.current_script_id}
+						onUpdate={handleEditorUpdate}
+					/>
+				{:else}
+					<div class="p-6">
+						<p class="text-sm text-zinc-600">No script created yet</p>
+					</div>
+				{/if}
 			</div>
 		</main>
 
