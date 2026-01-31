@@ -124,10 +124,6 @@ while true; do
         break
     fi
 
-    # Push changes
-    echo "  Pushing..."
-    git -C .. push origin "$CURRENT_BRANCH" 2>/dev/null || git -C .. push -u origin "$CURRENT_BRANCH" 2>/dev/null || echo "  (push failed or nothing to push)"
-
     echo ""
 done
 
