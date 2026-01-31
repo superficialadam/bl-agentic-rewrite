@@ -15,9 +15,7 @@
 
 ## Priority 4 — Project CRUD + Layout Shell ✅
 
-## Priority 5 — Script + Timeline API Routes
-GET/POST `/api/scripts/[id]`, `/api/scripts/[id]/sync`, GET `/api/timelines/[id]`, POST/PUT/DELETE `/api/clips/[id]`. Verify: curl smoke tests return shaped JSON.
-- Refs: `02-SCRIPT-EDITOR.md` (script API), `03-TIMELINE-EDITOR.md` (timeline/clip API)
+## Priority 5 — Script + Timeline API Routes ✅
 
 ## Priority 6 — TipTap Custom Nodes
 TipTap setup + 5 nodes (sceneHeading, action, character, dialogue, parenthetical). Render in center panel. Verify: unit tests for scene heading parser + node rendering.
