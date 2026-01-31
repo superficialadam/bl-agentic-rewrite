@@ -508,6 +508,105 @@ All follow same pattern: receive callback → update `processing_jobs` status �
 - **GetLate** — social media publishing orchestrator (Facebook, Instagram, TikTok, YouTube OAuth)
 - **Stripe/payments** — no payment integration found anywhere in codebase
 
-## 6. Auth & Permissions 🔍
+## 6. Auth & Permissions ✅
+
+### Authentication Method
+
+- **Cookie-based JWT** via Supabase Auth (`@supabase/ssr`)
+- Cookie name pattern: `sb-<project-ref>-auth-token`
+- No custom session store — relies entirely on Supabase's cookie-based JWT
+
+### Core Auth Function
+
+**`requireAuthWithClient()`** — `app/lib/auth.server.ts` L61–97
+1. Extracts auth token from cookie header
+2. **60-second in-memory cache** keyed by token (avoids duplicate `getUser()` calls across parent/child loaders)
+3. Creates user-scoped Supabase client via `createSupabaseServerClient(request)` (`app/services/supabase.server.ts` L9–75)
+4. Calls `supabaseClient.auth.getUser()` to verify session
+5. Redirects to `/login` on failure
+6. Returns `{ user, supabaseClient }`
+
+### Route-Level Protection
+
+- **No middleware or centralized guard** — each route individually calls `requireAuthWithClient()` in its loader
+- `app/entry.server.tsx` only contains Sentry instrumentation, no auth logic
+- The `/create` route loader (L407–426) calls `requireAuthWithClient()` then `verifyBrandAccess()`
+
+### Brand Access Verification
+
+**`verifyBrandAccess()`** — `app/lib/auth.server.ts` L149–233
+
+Access chain: `brands` →(inner join)→ `brands_teams` →(inner join)→ `teams` → verify `team_members` for user_id
+
+1. Fetches brand by slug with `!inner` join on `brands_teams` → `teams`
+2. Queries `team_members` WHERE `team_id` AND `user_id`
+3. Throws 403 if no membership found
+4. Returns `{ brand, team }`
+
+### Team & Role Model
+
+**`supabase/migrations/20250918085726_create_teams_functionality.sql`**
+
+| Table | Key Columns | Purpose |
+|-------|-------------|---------|
+| `teams` | id, slug, name, created_by | Team entity |
+| `team_members` | team_id, user_id, role | Membership with role |
+| `brands_teams` | brand_id, team_id (composite PK) | Brand↔team junction |
+
+**Roles**: `owner` > `admin` > `member` (CHECK constraint). Trigger auto-inserts creator as `owner`. Roles primarily affect team management, not content access within the create flow.
+
+### RLS Policy Pattern
+
+All brand-related tables use the same access check:
+```sql
+EXISTS (
+  SELECT 1 FROM brands_teams bt
+  JOIN team_members tm ON tm.team_id = bt.team_id
+  WHERE bt.brand_id = <table>.brand_id
+  AND tm.user_id = auth.uid()
+)
+```
+
+**Nested resources** traverse the full chain:
+- `scene_content` → `scenes` → `scripts` → `projects` → `brands` → `brands_teams` → `team_members`
+- `timeline_assets` → parent `assets` → brand_id check
+
+Tables with RLS: `assets`, `asset_versions`, `projects`, `timeline_assets`, `scripts`, `scenes`, `scene_content`, `asset_collections`, `collection_assets`, `processing_jobs`, `node_workflows`, `tags`, `asset_tags`
+
+### API Route Auth
+
+Mixed strategy:
+- **All API routes** call `requireAuthWithClient()` — none rely solely on RLS
+- **Some routes add manual verification** (e.g., `api.assets.create.tsx` queries `team_members` + `brands_teams` before proceeding)
+- **Other routes trust RLS** for authorization (e.g., `api.workflow.generate.tsx`, `api.dialogue.generate.tsx` only call `requireAuthWithClient()`)
+
+### Supabase Client Types
+
+| Client | Factory | RLS | Used In |
+|--------|---------|-----|---------|
+| User-scoped | `createSupabaseServerClient(request)` | Enforced | All route loaders/actions, most API routes |
+| Service role | `createSupabaseServiceRoleServerClient()` | **Bypassed** | Webhook handlers, background processing, `genai.server.ts` uploads |
+
+**Create flow uses user-scoped client only** — service role not used in `/create` route or its direct API calls.
+
+### Storage Policies
+
+**`assets` bucket** — `supabase/migrations/20251128134035_create_asset_management_system.sql` L14–95
+
+- **Public read**: `SELECT` allowed for all on `bucket_id = 'assets'`
+- **Write (INSERT/UPDATE/DELETE)**: Authenticated + brand membership verified via path:
+  ```sql
+  -- Extracts brand_id from storage path: assets/{brand_id}/...
+  WHERE b.id::text = (storage.foldername(objects.name))[1]
+  AND tm.user_id = auth.uid()
+  ```
+- Same pattern on `storyboard`, `thumbnails`, `videos`, `voiceovers` buckets
+
+### Security Summary
+
+- **Defense in depth**: Route-level auth → application-level brand verify → database RLS policies
+- **Create route specifics**: `requireAuthWithClient()` → `verifyBrandAccess()` → RLS on all queries
+- **No role-based content restrictions**: All team members (owner/admin/member) have equal content access within a brand
+- **Locking (not auth)**: Asset/workflow locks via `locked_by`/`locked_at` fields prevent concurrent edits but are cooperative, not enforced by RLS
 
 ## 7. Business Logic & Edge Cases 🔍
